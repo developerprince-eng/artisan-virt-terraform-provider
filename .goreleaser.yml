@@ -74,20 +74,22 @@ release:
   # Install instructions on every GitHub release page. The registry address
   # must match RegistryAddress in internal/provider/provider.go.
   header: |
-    ## Install from the Terraform Registry
+    ## Use in Terraform
 
     ```hcl
     terraform {
       required_providers {
         artisanvirt = {
-          source  = "developerprince/artisanvirt"
+          source  = "developerprince-eng/artisanvirt"
           version = "{{ .Version }}"
         }
       }
     }
     ```
 
-    Then run `terraform init`. Registry page: https://registry.terraform.io/providers/developerprince/artisanvirt/{{ .Version }}
+    `terraform init` installs it from the Terraform Registry when the provider is listed there
+    (https://registry.terraform.io/providers/developerprince-eng/artisanvirt/{{ .Version }}), or from a local
+    copy of this release's assets placed as shown below.
   footer: |
     ## Install from this release (offline or air-gapped)
 
@@ -97,13 +99,13 @@ release:
     ```sh
     VERSION={{ .Version }}
     PLATFORM=linux_amd64   # linux_arm64, darwin_arm64, darwin_amd64, windows_amd64, ...
-    BASE=https://github.com/{{ envOrDefault "GITHUB_REPOSITORY" "developerprince/terraform-provider-artisanvirt" }}/releases/download/{{ .Tag }}
+    BASE=https://github.com/{{ envOrDefault "GITHUB_REPOSITORY" "developerprince-eng/artisan-virt-terraform-provider" }}/releases/download/{{ .Tag }}
     curl -fLO "$BASE/{{ .ProjectName }}_${VERSION}_${PLATFORM}.zip"
     curl -fLO "$BASE/{{ .ProjectName }}_${VERSION}_SHA256SUMS"
     curl -fLO "$BASE/{{ .ProjectName }}_${VERSION}_SHA256SUMS.sig"
     gpg --verify {{ .ProjectName }}_${VERSION}_SHA256SUMS.sig {{ .ProjectName }}_${VERSION}_SHA256SUMS
     grep "_${PLATFORM}.zip" {{ .ProjectName }}_${VERSION}_SHA256SUMS | sha256sum -c -
-    DIR=~/.terraform.d/plugins/registry.terraform.io/developerprince/artisanvirt
+    DIR=~/.terraform.d/plugins/registry.terraform.io/developerprince-eng/artisanvirt
     mkdir -p "$DIR" && mv {{ .ProjectName }}_${VERSION}_${PLATFORM}.zip "$DIR/"
     ```
 

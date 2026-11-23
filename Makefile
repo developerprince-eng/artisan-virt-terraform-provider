@@ -4,13 +4,13 @@ NAME     := artisanvirt
 BINARY   := terraform-provider-$(NAME)
 VERSION  ?= 0.0.1
 OS_ARCH  := $(shell go env GOOS)_$(shell go env GOARCH)
-PLUGINS  := $(HOME)/.terraform.d/plugins/registry.terraform.io/developerprince/$(NAME)/$(VERSION)/$(OS_ARCH)
+PLUGINS  := $(HOME)/.terraform.d/plugins/registry.terraform.io/developerprince-eng/$(NAME)/$(VERSION)/$(OS_ARCH)
 
 build:
 	go build -o bin/$(BINARY) .
 
 # Installs into the local filesystem mirror so `terraform init` finds
-# developerprince/artisanvirt version $(VERSION) without the registry.
+# developerprince-eng/artisanvirt version $(VERSION) without the registry.
 install:
 	go build -ldflags="-X main.version=$(VERSION)" -o $(PLUGINS)/$(BINARY)_v$(VERSION) .
 

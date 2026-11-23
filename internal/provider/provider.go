@@ -18,7 +18,7 @@ import (
 )
 
 // RegistryAddress is the provider source address on the Terraform Registry.
-const RegistryAddress = "registry.terraform.io/developerprince/artisanvirt"
+const RegistryAddress = "registry.terraform.io/developerprince-eng/artisanvirt"
 
 var _ provider.Provider = (*artisanProvider)(nil)
 

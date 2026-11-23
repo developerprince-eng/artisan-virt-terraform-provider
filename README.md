@@ -9,7 +9,7 @@ is described by the OpenAPI document the control plane serves at `/openapi.yaml`
 terraform {
   required_providers {
     artisanvirt = {
-      source  = "developerprince/artisanvirt"
+      source  = "developerprince-eng/artisanvirt"
       version = "~> 0.1"
     }
   }
@@ -30,12 +30,13 @@ resource "artisanvirt_vm" "web" {
 
 ## Installing
 
-Every release is published three ways. Pick the first one unless you have a reason not to.
+Every release is published three ways. Use the Terraform Registry once the provider is listed there
+(see the naming note under [Publishing](#publishing)); until then, use GitHub Releases.
 
 | Source | Access | Use it for |
 |---|---|---|
-| [Terraform Registry](https://registry.terraform.io/providers/developerprince/artisanvirt) | public | normal use: `terraform init` downloads and verifies the provider |
-| [GitHub Releases](https://github.com/developerprince/terraform-provider-artisanvirt/releases) | public | offline / air-gapped machines, pinning a downloaded copy |
+| [Terraform Registry](https://registry.terraform.io/providers/developerprince-eng/artisanvirt) | public, once listed | normal use: `terraform init` downloads and verifies the provider |
+| [GitHub Releases](https://github.com/developerprince-eng/artisan-virt-terraform-provider/releases) | public | offline / air-gapped machines, pinning a downloaded copy |
 | GitLab package registry | private, token required | project members and internal build machines |
 
 All three serve the same signed files: one zip per platform, `SHA256SUMS`, and `SHA256SUMS.sig`. The
@@ -48,7 +49,7 @@ signature is made with key `6B0B6A4CD2811E216A9D898721806376C7816FDA`, whose pub
 terraform {
   required_providers {
     artisanvirt = {
-      source  = "developerprince/artisanvirt"
+      source  = "developerprince-eng/artisanvirt"
       version = "~> 0.1"
     }
   }
@@ -60,7 +61,7 @@ installed when the version is pinned exactly, e.g. `version = "1.2.0-rc.1"`.
 
 ### From GitHub Releases
 
-Each [GitHub release](https://github.com/developerprince/terraform-provider-artisanvirt/releases) carries
+Each [GitHub release](https://github.com/developerprince-eng/artisan-virt-terraform-provider/releases) carries
 the zips and checksums; the release page repeats these steps with its own version filled in. Terraform
 picks up a zip placed in its local plugin directory (the "implied local mirror") without contacting any
 registry for this provider.
@@ -71,7 +72,7 @@ Linux and macOS:
 VERSION=0.1.0
 PLATFORM=linux_amd64   # linux_arm64, darwin_arm64, darwin_amd64, freebsd_amd64, ...
 NAME=terraform-provider-artisanvirt
-BASE=https://github.com/developerprince/terraform-provider-artisanvirt/releases/download/v${VERSION}
+BASE=https://github.com/developerprince-eng/artisan-virt-terraform-provider/releases/download/v${VERSION}
 curl -fLO "$BASE/${NAME}_${VERSION}_${PLATFORM}.zip"
 curl -fLO "$BASE/${NAME}_${VERSION}_SHA256SUMS"
 curl -fLO "$BASE/${NAME}_${VERSION}_SHA256SUMS.sig"
@@ -81,7 +82,7 @@ gpg --import artisanvirt-signing.pub.asc        # once; the file is in this repo
 gpg --verify ${NAME}_${VERSION}_SHA256SUMS.sig ${NAME}_${VERSION}_SHA256SUMS
 grep "_${PLATFORM}.zip" ${NAME}_${VERSION}_SHA256SUMS | sha256sum -c -   # macOS: shasum -a 256 -c -
 
-DIR=~/.terraform.d/plugins/registry.terraform.io/developerprince/artisanvirt
+DIR=~/.terraform.d/plugins/registry.terraform.io/developerprince-eng/artisanvirt
 mkdir -p "$DIR" && mv ${NAME}_${VERSION}_${PLATFORM}.zip "$DIR/"
 ```
 
@@ -91,14 +92,14 @@ Windows (PowerShell):
 $Version  = "0.1.0"
 $Platform = "windows_amd64"   # or windows_arm64, windows_386
 $Name = "terraform-provider-artisanvirt"
-$Base = "https://github.com/developerprince/terraform-provider-artisanvirt/releases/download/v$Version"
+$Base = "https://github.com/developerprince-eng/artisan-virt-terraform-provider/releases/download/v$Version"
 $Zip  = "${Name}_${Version}_${Platform}.zip"
 $Sums = "${Name}_${Version}_SHA256SUMS"
 Invoke-WebRequest "$Base/$Zip"  -OutFile $Zip
 Invoke-WebRequest "$Base/$Sums" -OutFile $Sums
 $Expected = ((Select-String -Path $Sums -SimpleMatch $Zip).Line -split '\s+')[0]
 if ((Get-FileHash $Zip -Algorithm SHA256).Hash -ne $Expected) { throw "Checksum mismatch for $Zip" }
-$Dir = "$env:APPDATA\terraform.d\plugins\registry.terraform.io\developerprince\artisanvirt"
+$Dir = "$env:APPDATA\terraform.d\plugins\registry.terraform.io\developerprince-eng\artisanvirt"
 New-Item -ItemType Directory -Force $Dir | Out-Null
 Move-Item $Zip $Dir -Force
 ```
@@ -108,12 +109,12 @@ Move-Item $Zip $Dir -Force
 With the [GitHub CLI](https://cli.github.com/), the download is one command:
 
 ```sh
-gh release download v0.1.0 --repo developerprince/terraform-provider-artisanvirt \
+gh release download v0.1.0 --repo developerprince-eng/artisan-virt-terraform-provider \
   --pattern '*_linux_amd64.zip' --pattern '*_SHA256SUMS' --pattern '*_SHA256SUMS.sig'
 ```
 
 Then `terraform init` in your configuration. Keep the `required_providers` block from the registry
-example above; the source address stays `developerprince/artisanvirt`.
+example above; the source address stays `developerprince-eng/artisanvirt`.
 
 ### From the GitLab package registry (private)
 
@@ -131,7 +132,7 @@ AUTH="DEPLOY-TOKEN: <token>"        # or "PRIVATE-TOKEN: <token>"
 VERSION=0.1.0                       # tag v0.1.0
 PLATFORM=linux_amd64                # darwin_arm64, windows_amd64, ...
 BASE=https://gitlab.developer.co.zw/api/v4/projects/<project-id>/packages/generic/terraform-provider-artisanvirt/v${VERSION}
-DIR=~/.terraform.d/plugins/registry.terraform.io/developerprince/artisanvirt   # %APPDATA%\terraform.d\plugins\... on Windows
+DIR=~/.terraform.d/plugins/registry.terraform.io/developerprince-eng/artisanvirt   # %APPDATA%\terraform.d\plugins\... on Windows
 mkdir -p "$DIR"
 curl -fL --header "$AUTH" -o "$DIR/terraform-provider-artisanvirt_${VERSION}_${PLATFORM}.zip" \
   "$BASE/terraform-provider-artisanvirt_${VERSION}_${PLATFORM}.zip"
@@ -141,7 +142,7 @@ terraform init
 ```
 
 `<project-id>` is shown on the project's overview page. `terraform init` then uses the mirrored zip for
-`developerprince/artisanvirt` and the public registry for every other provider. Keep tokens out of
+`developerprince-eng/artisanvirt` and the public registry for every other provider. Keep tokens out of
 shell history and scripts in the repository (for example, read them from an environment variable set
 by your secret store).
 
@@ -192,7 +193,7 @@ To try a local build against a real control plane, add a dev override to `~/.ter
 ```hcl
 provider_installation {
   dev_overrides {
-    "developerprince/artisanvirt" = "/path/to/go/bin"
+    "developerprince-eng/artisanvirt" = "/path/to/go/bin"
   }
   direct {}
 }
@@ -210,20 +211,31 @@ version:
 | GitLab | [`.gitlab-ci.yml`](.gitlab-ci.yml) | GitLab Generic Package Registry + GitLab Releases (optionally HCP Terraform) |
 | GitHub | [`.github/workflows/release.yml`](.github/workflows/release.yml) | GitHub Releases, which the **public Terraform Registry** ingests |
 
-The public Terraform Registry only reads releases from a public GitHub repository named
-`terraform-provider-<name>`, which is why that half lives on GitHub. Both pipelines run GoReleaser with
-the same [`.goreleaser.yml`](.goreleaser.yml), so the file names and layout match on both hosts.
+The GitHub copy lives at
+[github.com/developerprince-eng/artisan-virt-terraform-provider](https://github.com/developerprince-eng/artisan-virt-terraform-provider);
+the `Release` workflow publishes every tag to that repository's
+[Releases](https://github.com/developerprince-eng/artisan-virt-terraform-provider/releases). Both
+pipelines run GoReleaser with the same [`.goreleaser.yml`](.goreleaser.yml), so file names and layout
+match on both hosts.
+
+> **Terraform Registry naming rule.** The public Terraform Registry only accepts a public GitHub
+> repository named `terraform-provider-<type>` (lowercase). `artisan-virt-terraform-provider` does not
+> match, so releases there work for GitHub downloads but cannot be added to registry.terraform.io.
+> To list the provider on the registry, rename the GitHub repository to `terraform-provider-artisanvirt`
+> (*Settings → General → Repository name*; GitHub redirects the old URLs, including release downloads).
+> The provider address `developerprince-eng/artisanvirt` stays the same either way.
 
 ### One-time setup
 
 1. **Remotes.** Push the project to both hosts, for example:
    ```sh
    git remote add origin https://gitlab.developer.co.zw/developerprince/terraform-provider-artisanvirt.git
-   git remote add github https://github.com/developerprince/terraform-provider-artisanvirt.git
+   git remote add github https://github.com/developerprince-eng/artisan-virt-terraform-provider.git
    git push origin main && git push github main
    ```
-   The GitHub owner is the registry namespace (`developerprince/artisanvirt`). If yours differs, change
-   `RegistryAddress` in `internal/provider/provider.go` and the `source` in `examples/` and this README.
+   The GitHub owner `developerprince-eng` is the provider namespace, so users write
+   `source = "developerprince-eng/artisanvirt"`. If the owner ever changes, update `RegistryAddress` in
+   `internal/provider/provider.go`, the `source` in `examples/`, `.goreleaser.yml` and this README.
 2. **Signing key.** Create an RSA key (the Terraform Registry does not accept ECC keys):
    ```sh
    gpg --pinentry-mode loopback --full-generate-key                      # RSA and RSA, 4096 bits
@@ -231,13 +243,21 @@ the same [`.goreleaser.yml`](.goreleaser.yml), so the file names and layout matc
    gpg --armor --export <FINGERPRINT>                          # public key, for the registry
    gpg --armor --export-secret-keys <FINGERPRINT> | base64 -w0 # private key, for CI secrets
    ```
-3. **GitHub secrets** (*Settings → Secrets and variables → Actions*): `GPG_PRIVATE_KEY` (the armored
-   key or its base64) and `GPG_PASSPHRASE` (if the key has one). The workflow uses the built-in
-   `GITHUB_TOKEN` to create releases; no personal token is needed.
-4. **Terraform Registry.** Sign in to [registry.terraform.io](https://registry.terraform.io) with the
-   GitHub account, add the public key under *Settings → Signing Keys*, then *Publish → Provider* and
-   pick the repository. Do this once the first GitHub release exists; later releases are picked up
-   automatically.
+3. **GitHub secrets** in `developerprince-eng/artisan-virt-terraform-provider`
+   (*Settings → Secrets and variables → Actions*):
+
+   | Secret | Value |
+   |---|---|
+   | `GPG_PRIVATE_KEY` | the armored private key or its base64 |
+   | `GPG_PASSPHRASE` | key passphrase, if any |
+   | `GIT_TOKEN` | fine-grained token for this repository with *Contents: Read and write* (creates the release) |
+
+   (`release.yml` reads `secrets.GIT_TOKEN`. Switching it to the built-in `secrets.GITHUB_TOKEN` also
+   works, because the workflow grants `contents: write`, and removes the need for this secret.)
+4. **Terraform Registry** (after renaming the repository, see the note above). Sign in to
+   [registry.terraform.io](https://registry.terraform.io) with the `developerprince-eng` GitHub account,
+   add the public key under *Settings → Signing Keys*, then *Publish → Provider* and pick the repository.
+   Do this once the first GitHub release exists; later releases are picked up automatically.
 5. **GitLab CI/CD variables** (*Settings → CI/CD → Variables*, Masked and Protected):
 
    | Variable | Value |

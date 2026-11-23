@@ -1,7 +1,7 @@
 terraform {
   required_providers {
     artisanvirt = {
-      source  = "developerprince/artisanvirt"
+      source  = "developerprince-eng/artisanvirt"
       version = "~> 0.1"
     }
   }
