@@ -282,7 +282,7 @@ match on both hosts.
    | `GPG_PRIVATE_KEY` | base64 of the armored secret key (or a *File* variable with the armored key) |
    | `GPG_FINGERPRINT` | the key fingerprint |
    | `GPG_PASSPHRASE` | key passphrase, if any |
-   | `RELEASE_TOKEN` | project access token with `api` + `write_repository`, used by the manual `tag-release` job |
+   | `RELEASE_TOKEN` | optional: project access token (*Settings → Access tokens*, role **Maintainer**, scopes `api` + `write_repository`) for the manual `tag-release` job. The job stays hidden until this is set; GitLab's job token cannot create tags or start the tag pipeline |
    | `TFC_TOKEN`, `TFC_ORGANIZATION` | optional: also publish to an HCP Terraform private registry (`TFC_HOSTNAME` for Terraform Enterprise) |
 
    The GPG variables are optional on GitLab: without them tags are published unsigned. Protected
@@ -309,9 +309,10 @@ On GitHub you can instead open **Actions → Release → Run workflow** on `main
 and publishes the release and package in one run. Push the new tag to GitLab afterwards if you want the
 GitLab copy too: `git fetch github --tags && git push origin v0.1.1`.
 
-On GitLab, run the manual **`tag-release`** job on the default-branch pipeline (it bumps the patch version
-of the latest tag; set `BUMP=minor`/`BUMP=major`, or `VERSION=v1.4.0`), then mirror the tag:
-`git fetch origin --tags && git push github v1.4.0`.
+On GitLab, once `RELEASE_TOKEN` is configured, run the manual **`tag-release`** job on the
+default-branch pipeline (it bumps the patch version of the latest tag; set `BUMP=minor`/`BUMP=major`, or
+`VERSION=v1.4.0`), then mirror the tag: `git fetch origin --tags && git push github v1.4.0`. Without
+the token, push the tag yourself as shown above; that publishes exactly the same way.
 
 Each tag pipeline runs the tests first:
 

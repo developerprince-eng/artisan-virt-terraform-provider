@@ -5,6 +5,7 @@
 #   any branch         -> test, docs check, GoReleaser config check
 #   default branch     -> + snapshot build uploaded to the Generic Package Registry as "latest"
 #                         + manual "tag-release" job that cuts the next version tag
+#                           (only when RELEASE_TOKEN is set)
 #   tag vX.Y.Z[-pre]   -> + signed release uploaded to the Generic Package Registry as vX.Y.Z,
 #                           a GitLab release linking to it, the "stable" channel manifest,
 #                           and optionally an HCP Terraform private registry
@@ -22,7 +23,8 @@
 #   GPG_PRIVATE_KEY   release signing key: File variable, armored key, or base64 of it
 #   GPG_FINGERPRINT   fingerprint of that key        (both optional: unset = unsigned release)
 #   GPG_PASSPHRASE    key passphrase (optional)
-#   RELEASE_TOKEN     project access token (api, write_repository) for "tag-release"
+#   RELEASE_TOKEN     project access token (Maintainer; api, write_repository) for the
+#                     manual "tag-release" job, which stays hidden until it is set
 #   TFC_TOKEN, TFC_ORGANIZATION[, TFC_HOSTNAME]       optional HCP Terraform private registry
 #   SONAR_HOST_URL, SONAR_TOKEN[, SONAR_PROJECT_KEY]  optional SonarQube analysis
 
@@ -267,7 +269,14 @@ build-and-release:
 # The tag pipeline then publishes it. Set VERSION=v1.4.0 to choose one, or
 # BUMP=patch|minor|major (default patch) to increment the latest vX.Y.Z tag.
 # This tags the GitLab repository only; push the same tag to GitHub to publish
-# it on the Terraform Registry (see README "Releasing a version").
+# it there too (see README "Releasing a version").
+#
+# Needs RELEASE_TOKEN: CI_JOB_TOKEN can only read tags, and pushes made with it
+# never start pipelines, so it cannot start the tag pipeline that publishes.
+# Create a project access token (role Maintainer so it may create protected v*
+# tags; scopes api + write_repository) and store it as the masked, protected
+# CI/CD variable RELEASE_TOKEN. Until then the job is hidden; release by pushing
+# a tag instead: git tag v0.1.0 && git push origin v0.1.0
 tag-release:
   stage: release
   dependencies: []
@@ -297,7 +306,9 @@ tag-release:
         echo "Tag ${VERSION} already exists." >&2
         exit 1
       fi
-      curl --fail --silent --show-error --request POST \
+      # --fail-with-body prints GitLab's reason, e.g. a token role that may not
+      # create protected tags.
+      curl --fail-with-body --silent --show-error --request POST \
         --header "PRIVATE-TOKEN: ${RELEASE_TOKEN}" \
         --data-urlencode "tag_name=${VERSION}" \
         --data-urlencode "ref=${CI_COMMIT_SHA}" \
@@ -306,6 +317,7 @@ tag-release:
       echo "Created tag ${VERSION} at ${CI_COMMIT_SHORT_SHA}; its pipeline publishes the release."
       echo "To publish on the Terraform Registry too: git fetch origin --tags && git push github ${VERSION}"
   rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    # Shown only once RELEASE_TOKEN is configured (see above).
+    - if: $RELEASE_TOKEN && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       when: manual
       allow_failure: true
