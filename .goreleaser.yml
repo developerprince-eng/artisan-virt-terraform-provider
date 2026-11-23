@@ -113,6 +113,15 @@ release:
     `artisanvirt-signing.pub.asc` in the repository (`gpg --import artisanvirt-signing.pub.asc`).
     Windows (PowerShell) steps are in the repository README under "Installing → From GitHub Releases".
 
+    ## Container image (GitHub Packages)
+
+    The same zips are published as a provider mirror image for CI images:
+
+    ```dockerfile
+    FROM hashicorp/terraform:latest
+    COPY --from=ghcr.io/{{ tolower (envOrDefault "GITHUB_REPOSITORY" "developerprince-eng/artisan-virt-terraform-provider") }}:{{ .Version }} /plugins/ /root/.terraform.d/plugins/
+    ```
+
 changelog:
   use: git
   sort: asc

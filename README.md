@@ -30,16 +30,17 @@ resource "artisanvirt_vm" "web" {
 
 ## Installing
 
-Every release is published three ways. Use the Terraform Registry once the provider is listed there
+Every release is published four ways. Use the Terraform Registry once the provider is listed there
 (see the naming note under [Publishing](#publishing)); until then, use GitHub Releases.
 
 | Source | Access | Use it for |
 |---|---|---|
 | [Terraform Registry](https://registry.terraform.io/providers/developerprince-eng/artisanvirt) | public, once listed | normal use: `terraform init` downloads and verifies the provider |
 | [GitHub Releases](https://github.com/developerprince-eng/artisan-virt-terraform-provider/releases) | public | offline / air-gapped machines, pinning a downloaded copy |
+| [GitHub Packages](https://github.com/developerprince-eng/artisan-virt-terraform-provider/pkgs/container/artisan-virt-terraform-provider) (ghcr.io image) | public | CI / container images: `COPY --from` the provider into a Terraform image |
 | GitLab package registry | private, token required | project members and internal build machines |
 
-All three serve the same signed files: one zip per platform, `SHA256SUMS`, and `SHA256SUMS.sig`. The
+All of them carry the same signed files: one zip per platform, `SHA256SUMS`, and `SHA256SUMS.sig`. The
 signature is made with key `6B0B6A4CD2811E216A9D898721806376C7816FDA`, whose public key is
 [`artisanvirt-signing.pub.asc`](artisanvirt-signing.pub.asc) in this repository.
 
@@ -115,6 +116,22 @@ gh release download v0.1.0 --repo developerprince-eng/artisan-virt-terraform-pro
 
 Then `terraform init` in your configuration. Keep the `required_providers` block from the registry
 example above; the source address stays `developerprince-eng/artisanvirt`.
+
+### From GitHub Packages (container image)
+
+Each release also publishes `ghcr.io/developerprince-eng/artisan-virt-terraform-provider:<version>`
+(and `:latest` for final versions). It is not a program to run: it holds the release zips in
+Terraform's local-mirror layout under `/plugins`, plus `SHA256SUMS`, its signature and the public key
+under `/checksums`. Copy it into the image your pipelines run Terraform in:
+
+```dockerfile
+FROM hashicorp/terraform:latest
+COPY --from=ghcr.io/developerprince-eng/artisan-virt-terraform-provider:0.1.0 /plugins/ /root/.terraform.d/plugins/
+```
+
+`terraform init` in that image then installs `developerprince-eng/artisanvirt` from the copied files,
+with no access to any registry needed for this provider. To pull the files onto a machine without
+Docker, use any OCI tool, e.g. `crane export ghcr.io/developerprince-eng/artisan-virt-terraform-provider:0.1.0 - | tar -x`.
 
 ### From the GitLab package registry (private)
 
@@ -275,6 +292,9 @@ match on both hosts.
 
 ### Releasing a version
 
+Pushing a branch only runs the tests. **Nothing is published until a version tag exists**, so a repository
+with no tags shows no releases and no packages.
+
 Add the changes to [CHANGELOG.md](CHANGELOG.md), push the default branch to both remotes, then tag the
 same commit on both:
 
@@ -284,7 +304,12 @@ git push origin v0.1.0    # GitLab: package registry + GitLab release
 git push github v0.1.0    # GitHub: GitHub release -> Terraform Registry
 ```
 
-Or run the manual **`tag-release`** job on GitLab's default-branch pipeline (it bumps the patch version
+On GitHub you can instead open **Actions → Release → Run workflow** on `main`: choose a
+`patch`/`minor`/`major` bump or type an exact version, and the workflow runs the tests, creates the tag
+and publishes the release and package in one run. Push the new tag to GitLab afterwards if you want the
+GitLab copy too: `git fetch github --tags && git push origin v0.1.1`.
+
+On GitLab, run the manual **`tag-release`** job on the default-branch pipeline (it bumps the patch version
 of the latest tag; set `BUMP=minor`/`BUMP=major`, or `VERSION=v1.4.0`), then mirror the tag:
 `git fetch origin --tags && git push github v1.4.0`.
 
@@ -295,8 +320,10 @@ Each tag pipeline runs the tests first:
   `…/packages/generic/terraform-provider-artisanvirt/<tag>/`, creates a GitLab release linking to them,
   and points `…/stable/release.json` at it. Default-branch pushes publish an unsigned snapshot as
   `latest` (`edge` channel), as artisan-virt does.
-- **GitHub** (`Release` workflow) creates the GitHub release with the same files; the Terraform Registry
-  ingests it within a few minutes.
+- **GitHub** (`Release` workflow) creates the GitHub release with the same files plus install notes,
+  and pushes the provider mirror image `ghcr.io/developerprince-eng/artisan-virt-terraform-provider:<version>`
+  to GitHub Packages. Once the provider is listed, the Terraform Registry ingests the release within a
+  few minutes.
 
 Pre-release tags (`v1.2.0-rc.1`) become GitHub pre-releases, which Terraform only installs when a
 configuration pins that exact version.

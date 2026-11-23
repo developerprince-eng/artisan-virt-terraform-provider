@@ -1,0 +1,6 @@
+# The provider mirror image (packaging/Dockerfile) needs only the release files.
+*
+!dist/*.zip
+!dist/*_SHA256SUMS
+!dist/*_SHA256SUMS.sig
+!artisanvirt-signing.pub.asc
