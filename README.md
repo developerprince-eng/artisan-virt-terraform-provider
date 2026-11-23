@@ -1,0 +1,184 @@
+# ![Terraform Provider for Artisan Virt](https://img.shields.io/badge/Terraform_Provider_for_Artisan_Virt_%7C_Artisan_Virt-%23203072.svg?style=for-the-badge)
+
+Manage an [Artisan Virt](https://gitlab.developer.co.zw/developerprince/artisan-virt) fleet (hypervisor
+nodes, clusters, KVM virtual machines, host bridges and backups) with Terraform. The provider talks to
+the control plane administrator API (`/api/v1`, see `backend/internal/httpapi/openapi.yaml` in the
+artisan-virt repository).
+
+```hcl
+terraform {
+  required_providers {
+    artisanvirt = {
+      source  = "developerprince/artisanvirt"
+      version = "~> 0.1"
+    }
+  }
+}
+
+provider "artisanvirt" {
+  endpoint = "https://artisan.example.com" # or ARTISANVIRT_ENDPOINT
+  # token  = "..."                         # or ARTISANVIRT_TOKEN
+}
+
+resource "artisanvirt_vm" "web" {
+  name       = "web01"
+  vcpus      = 2
+  memory_mib = 4096
+  disks      = [{ size_gib = 20 }]
+}
+```
+
+## Resources and data sources
+
+| Resource | API | Notes |
+|---|---|---|
+| `artisanvirt_enrollment_token` | `/enrollment-tokens` | Single-use token for agent enrollment; `value` is sensitive. |
+| `artisanvirt_node` | `/nodes/{id}/approve`, `/maintenance`, `/decommission` | Approves an enrolled host and waits for provisioning. |
+| `artisanvirt_bridge` | `/nodes/{id}/bridges` | Isolated or NAT libvirt bridge. |
+| `artisanvirt_cluster` | `/clusters` | Corosync/Pacemaker cluster; replaced on change. |
+| `artisanvirt_cluster_member` | `/clusters/{id}/nodes` | Join/leave after preflight. |
+| `artisanvirt_vm` | `/vms`, `/vms/{id}/actions/*` | Power state changes in place; hardware changes replace. |
+| `artisanvirt_vm_snapshot` | `/vms/{id}/snapshots` | Internal snapshot. |
+| `artisanvirt_vm_gpu` | `/vms/{id}/gpu` | PCI / SR-IOV passthrough to a stopped UEFI VM. |
+| `artisanvirt_backup_target` | `/backup-targets` | NFS or filesystem repository. |
+| `artisanvirt_backup_policy` | `/backup-policies` | Cron schedule, retention, selector; updated in place. |
+
+Data sources: `artisanvirt_node`, `artisanvirt_nodes`, `artisanvirt_cluster`, `artisanvirt_clusters`,
+`artisanvirt_vm`, `artisanvirt_vms`, `artisanvirt_backup_targets`, `artisanvirt_backups`.
+
+Long-running operations return `202 Accepted` from the API; the provider waits for the queued task (or
+the resource state) to finish and honours `timeouts { create/update/delete }` blocks. Full reference:
+[`docs/`](docs/) (rendered by the Terraform Registry).
+
+The control plane has no update endpoint for VMs, clusters, bridges, backup targets or tokens, so
+changing their arguments plans a replacement. Read the plan before applying.
+
+## Development
+
+Requirements: Go 1.25.8+, Terraform 1.5+ (for the tests and doc generation), GNU make (optional).
+
+```sh
+make build      # go build
+make test       # unit tests + Terraform-driven tests against an in-memory fake API
+make docs       # regenerate docs/ from the schema and examples/ (commit the result)
+make install    # install into ~/.terraform.d/plugins for local use
+```
+
+Without make: `go test ./...`, `go generate ./...`.
+
+To try a local build against a real control plane, add a dev override to `~/.terraformrc`
+(`%APPDATA%\terraform.rc` on Windows):
+
+```hcl
+provider_installation {
+  dev_overrides {
+    "developerprince/artisanvirt" = "/path/to/go/bin"
+  }
+  direct {}
+}
+```
+
+then `go install .` and run `terraform plan` (no `terraform init` needed for overridden providers).
+
+## Publishing
+
+The repository is pushed to both GitLab and GitHub, and each host publishes its own copy of every
+version:
+
+| Host | Pipeline | Publishes to |
+|---|---|---|
+| GitLab | [`.gitlab-ci.yml`](.gitlab-ci.yml) | GitLab Generic Package Registry + GitLab Releases (optionally HCP Terraform) |
+| GitHub | [`.github/workflows/release.yml`](.github/workflows/release.yml) | GitHub Releases, which the **public Terraform Registry** ingests |
+
+The public Terraform Registry only reads releases from a public GitHub repository named
+`terraform-provider-<name>`, which is why that half lives on GitHub. Both pipelines run GoReleaser with
+the same [`.goreleaser.yml`](.goreleaser.yml), so the file names and layout match on both hosts.
+
+### One-time setup
+
+1. **Remotes.** Push the project to both hosts, for example:
+   ```sh
+   git remote add origin https://gitlab.developer.co.zw/developerprince/terraform-provider-artisanvirt.git
+   git remote add github https://github.com/developerprince/terraform-provider-artisanvirt.git
+   git push origin main && git push github main
+   ```
+   The GitHub owner is the registry namespace (`developerprince/artisanvirt`). If yours differs, change
+   `RegistryAddress` in `internal/provider/provider.go` and the `source` in `examples/` and this README.
+2. **Signing key.** Create an RSA key (the Terraform Registry does not accept ECC keys):
+   ```sh
+   gpg --pinentry-mode loopback --full-generate-key                      # RSA and RSA, 4096 bits
+   gpg --list-secret-keys --keyid-format long   # note the fingerprint
+   gpg --armor --export <FINGERPRINT>                          # public key, for the registry
+   gpg --armor --export-secret-keys <FINGERPRINT> | base64 -w0 # private key, for CI secrets
+   ```
+3. **GitHub secrets** (*Settings → Secrets and variables → Actions*): `GPG_PRIVATE_KEY` (the armored
+   key or its base64) and `GPG_PASSPHRASE` (if the key has one). The workflow uses the built-in
+   `GITHUB_TOKEN` to create releases; no personal token is needed.
+4. **Terraform Registry.** Sign in to [registry.terraform.io](https://registry.terraform.io) with the
+   GitHub account, add the public key under *Settings → Signing Keys*, then *Publish → Provider* and
+   pick the repository. Do this once the first GitHub release exists; later releases are picked up
+   automatically.
+5. **GitLab CI/CD variables** (*Settings → CI/CD → Variables*, Masked and Protected):
+
+   | Variable | Value |
+   |---|---|
+   | `GPG_PRIVATE_KEY` | base64 of the armored secret key (or a *File* variable with the armored key) |
+   | `GPG_FINGERPRINT` | the key fingerprint |
+   | `GPG_PASSPHRASE` | key passphrase, if any |
+   | `RELEASE_TOKEN` | project access token with `api` + `write_repository`, used by the manual `tag-release` job |
+   | `TFC_TOKEN`, `TFC_ORGANIZATION` | optional: also publish to an HCP Terraform private registry (`TFC_HOSTNAME` for Terraform Enterprise) |
+
+   The GPG variables are optional on GitLab: without them tags are published unsigned. Protected
+   variables are only exposed to protected refs, so protect the tag pattern `v*` under
+   *Settings → Repository → Protected tags*. Uploads use the job's `CI_JOB_TOKEN`; no extra token is
+   needed for the package registry.
+
+### Releasing a version
+
+Add the changes to [CHANGELOG.md](CHANGELOG.md), push the default branch to both remotes, then tag the
+same commit on both:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0    # GitLab: package registry + GitLab release
+git push github v0.1.0    # GitHub: GitHub release -> Terraform Registry
+```
+
+Or run the manual **`tag-release`** job on GitLab's default-branch pipeline (it bumps the patch version
+of the latest tag; set `BUMP=minor`/`BUMP=major`, or `VERSION=v1.4.0`), then mirror the tag:
+`git fetch origin --tags && git push github v1.4.0`.
+
+Each tag pipeline runs the tests first:
+
+- **GitLab** (`build-and-release`) uploads the zips, `terraform-provider-artisanvirt_<version>_SHA256SUMS`,
+  its `.sig`, the registry manifest and a `release.json` build manifest to
+  `…/packages/generic/terraform-provider-artisanvirt/<tag>/`, creates a GitLab release linking to them,
+  and points `…/stable/release.json` at it. Default-branch pushes publish an unsigned snapshot as
+  `latest` (`edge` channel), as artisan-virt does.
+- **GitHub** (`Release` workflow) creates the GitHub release with the same files; the Terraform Registry
+  ingests it within a few minutes.
+
+Pre-release tags (`v1.2.0-rc.1`) become GitHub pre-releases, which Terraform only installs when a
+configuration pins that exact version.
+
+## Installing from GitLab
+
+Users who cannot reach the public registry can install a release from the GitLab package registry.
+Terraform's implied local mirror accepts the release zip as is:
+
+```sh
+VERSION=0.1.0                       # tag v0.1.0
+PLATFORM=linux_amd64                # darwin_arm64, windows_amd64, ...
+BASE=https://gitlab.developer.co.zw/api/v4/projects/<project-id>/packages/generic/terraform-provider-artisanvirt/v${VERSION}
+DIR=~/.terraform.d/plugins/registry.terraform.io/developerprince/artisanvirt   # %APPDATA%\terraform.d\plugins\... on Windows
+mkdir -p "$DIR"
+# Add --header "PRIVATE-TOKEN: <token with read_api>" if the project is private.
+curl -fLo "$DIR/terraform-provider-artisanvirt_${VERSION}_${PLATFORM}.zip" \
+  "$BASE/terraform-provider-artisanvirt_${VERSION}_${PLATFORM}.zip"
+curl -fLO "$BASE/terraform-provider-artisanvirt_${VERSION}_SHA256SUMS"
+(cd "$DIR" && grep "_${PLATFORM}.zip" "$OLDPWD/terraform-provider-artisanvirt_${VERSION}_SHA256SUMS" | sha256sum -c -)
+terraform init
+```
+
+`terraform init` then uses the mirrored zip for `developerprince/artisanvirt` and the public registry
+for every other provider.

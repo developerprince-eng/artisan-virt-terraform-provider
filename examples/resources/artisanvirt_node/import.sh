@@ -1,0 +1,1 @@
+terraform import artisanvirt_node.hv01 node-0123456789abcdef

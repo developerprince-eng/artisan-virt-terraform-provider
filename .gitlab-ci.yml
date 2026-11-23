@@ -1,0 +1,308 @@
+# GitLab pipeline for terraform-provider-artisanvirt, modelled on the artisan-virt pipeline.
+# It publishes to GitLab only; the GitHub copy of this repository publishes to the public
+# Terraform Registry with .github/workflows/release.yml.
+#
+#   any branch         -> test, docs check, GoReleaser config check
+#   default branch     -> + snapshot build uploaded to the Generic Package Registry as "latest"
+#                         + manual "tag-release" job that cuts the next version tag
+#   tag vX.Y.Z[-pre]   -> + signed release uploaded to the Generic Package Registry as vX.Y.Z,
+#                           a GitLab release linking to it, the "stable" channel manifest,
+#                           and optionally an HCP Terraform private registry
+#
+# Package layout (same scheme as artisan-virt):
+#   ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/terraform-provider-artisanvirt/<version>/
+#     terraform-provider-artisanvirt_<v>_<os>_<arch>.zip   one per platform
+#     terraform-provider-artisanvirt_<v>_SHA256SUMS(.sig)  checksums and detached signature
+#     terraform-provider-artisanvirt_<v>_manifest.json     Terraform registry manifest
+#     release.json                                          machine-readable build manifest
+#   .../terraform-provider-artisanvirt/stable/release.json  points at the newest tag
+#
+# CI/CD variables (Settings > CI/CD > Variables; mark secrets Masked + Protected and
+# protect the v* tag pattern under Settings > Repository > Protected tags):
+#   GPG_PRIVATE_KEY   release signing key: File variable, armored key, or base64 of it
+#   GPG_FINGERPRINT   fingerprint of that key        (both optional: unset = unsigned release)
+#   GPG_PASSPHRASE    key passphrase (optional)
+#   RELEASE_TOKEN     project access token (api, write_repository) for "tag-release"
+#   TFC_TOKEN, TFC_ORGANIZATION[, TFC_HOSTNAME]       optional HCP Terraform private registry
+#   SONAR_HOST_URL, SONAR_TOKEN[, SONAR_PROJECT_KEY]  optional SonarQube analysis
+
+stages:
+  - test-and-quality
+  - build-and-publish
+  - release
+
+variables:
+  PROVIDER_NAME: "artisanvirt"
+  PROJECT_NAME: "terraform-provider-artisanvirt"
+  GO_IMAGE: "golang:1.25-bookworm"
+  GORELEASER_VERSION: "v2.20.3"
+  TERRAFORM_VERSION: "1.17.2"
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: never # branch pipelines already cover MR branches
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH
+
+# Jobs are self-contained (no cache, no artifacts passed between jobs): the
+# dev-node runner fails in its cache-restore and artifact-download steps.
+default:
+  image: ${GO_IMAGE}
+  cache: {}
+
+# -------------------------------------------------------------
+# Stage 1: Format, Vet, Unit + Terraform-driven Tests, Docs
+# -------------------------------------------------------------
+test:
+  stage: test-and-quality
+  variables:
+    # -race needs cgo; the bookworm image ships gcc.
+    CGO_ENABLED: "1"
+    GIT_DEPTH: "0"
+    SONAR_SCANNER_VERSION: "6.2.1.4610"
+  before_script:
+    # The provider tests run real terraform plan/apply against a fake API.
+    - bash scripts/ci/install-tools.sh terraform
+    - go mod download
+  script:
+    - echo "Checking formatting and go.mod..."
+    - test -z "$(gofmt -l .)" || { gofmt -l .; echo "Run gofmt -w ."; exit 1; }
+    - go mod tidy && git diff --exit-code -- go.mod go.sum || { echo "Run go mod tidy"; exit 1; }
+    - go vet ./...
+    - go test -v -race -timeout 20m -coverprofile=coverage.out -covermode=atomic ./...
+    - go tool cover -func=coverage.out | tail -n 1
+    - terraform fmt -recursive -check examples
+    # SonarQube runs only once SONAR_HOST_URL / SONAR_TOKEN are set as CI/CD variables.
+    - |
+      if [ -z "${SONAR_TOKEN}" ]; then
+        echo "SONAR_TOKEN is not set; skipping SonarQube analysis."
+      else
+        apt-get update && apt-get install -y --no-install-recommends openjdk-17-jre-headless unzip
+        curl -sSLo /tmp/sonar.zip "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${SONAR_SCANNER_VERSION}.zip"
+        unzip -q /tmp/sonar.zip -d /opt
+        ln -sf "/opt/sonar-scanner-${SONAR_SCANNER_VERSION}/bin/sonar-scanner" /usr/local/bin/sonar-scanner
+        rm -f /tmp/sonar.zip
+        sonar-scanner \
+          -Dsonar.projectKey="${SONAR_PROJECT_KEY:-terraform-provider-artisanvirt}" \
+          -Dsonar.sources=. \
+          -Dsonar.exclusions="**/*_test.go,docs/**,examples/**" \
+          -Dsonar.tests=. \
+          -Dsonar.test.inclusions="**/*_test.go" \
+          -Dsonar.go.coverage.reportPaths=coverage.out \
+          -Dsonar.host.url="${SONAR_HOST_URL}" \
+          -Dsonar.token="${SONAR_TOKEN}" \
+          -Dsonar.scm.provider=git \
+          -Dsonar.qualitygate.wait=true
+      fi
+
+docs:
+  stage: test-and-quality
+  before_script:
+    - bash scripts/ci/install-tools.sh terraform
+  script:
+    # docs/ is what the Terraform Registry renders; it must match the schema.
+    - go generate ./...
+    - git diff --exit-code -- docs/ || { echo "docs/ is stale: run 'go generate ./...' and commit"; exit 1; }
+    - test -z "$(git status --porcelain -- docs/)" || { git status --porcelain -- docs/; echo "untracked docs: commit them"; exit 1; }
+    - go tool tfplugindocs validate --provider-name ${PROVIDER_NAME}
+
+goreleaser-check:
+  stage: test-and-quality
+  before_script:
+    - bash scripts/ci/install-tools.sh goreleaser
+  script:
+    - goreleaser check
+
+# -------------------------------------------------------------
+# Stage 2: Build All Platforms, Upload to the GitLab Package Registry,
+#          & Create the Official GitLab Release
+# -------------------------------------------------------------
+build-and-release:
+  stage: build-and-publish
+  # Runs after every stage-1 job passes; downloads nothing from them.
+  dependencies: []
+  variables:
+    # GoReleaser derives versions from tags and needs the full history.
+    GIT_DEPTH: "0"
+  before_script:
+    - bash scripts/ci/install-tools.sh goreleaser
+    - |
+      RELEASE_CLI_URL="https://gitlab.com/api/v4/projects/gitlab-org%2Frelease-cli/packages/generic/release-cli/latest/release-cli-linux-amd64"
+      curl -sSLo /usr/local/bin/release-cli "${RELEASE_CLI_URL}"
+      chmod +x /usr/local/bin/release-cli
+  script:
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        RELEASE_VERSION="$CI_COMMIT_TAG"
+      else
+        RELEASE_VERSION="latest"
+      fi
+      PACKAGE_REGISTRY_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/${PROJECT_NAME}/${RELEASE_VERSION}"
+      echo "Target Version: ${RELEASE_VERSION}"
+      echo "Registry URL:   ${PACKAGE_REGISTRY_URL}"
+
+    # Zips for every platform, SHA256SUMS and (when a key is configured) its signature.
+    - |
+      SIGNED=false
+      if [ -z "$CI_COMMIT_TAG" ]; then
+        echo "Building snapshot of ${CI_COMMIT_SHORT_SHA}..."
+        goreleaser release --snapshot --clean --skip=sign
+      elif [ -n "${GPG_PRIVATE_KEY}" ] && [ -n "${GPG_FINGERPRINT}" ]; then
+        echo "Building and signing ${CI_COMMIT_TAG}..."
+        bash scripts/ci/import-gpg-key.sh
+        goreleaser release --clean --skip=publish
+        SIGNED=true
+      else
+        echo "WARNING: GPG_PRIVATE_KEY / GPG_FINGERPRINT not set; building ${CI_COMMIT_TAG} unsigned."
+        goreleaser release --clean --skip=publish,sign
+      fi
+
+    # GoReleaser lists the registry manifest in SHA256SUMS but leaves it out of
+    # dist/, so copy it in under its release name before verifying.
+    - |
+      SUMS=$(ls dist/*_SHA256SUMS)
+      VERSION=$(basename "$SUMS" | sed -E "s/^${PROJECT_NAME}_(.*)_SHA256SUMS$/\1/")
+      cp terraform-registry-manifest.json "dist/${PROJECT_NAME}_${VERSION}_manifest.json"
+      (cd dist && sha256sum -c "$(basename "$SUMS")")
+      if [ "$SIGNED" = true ]; then
+        gpg --batch --verify "${SUMS}.sig" "$SUMS"
+      fi
+      FILES=""
+      for F in dist/*.zip dist/*_SHA256SUMS dist/*_SHA256SUMS.sig dist/*_manifest.json; do
+        if [ -e "$F" ]; then FILES="${FILES} ${F}"; fi
+      done
+      echo "Provider version: ${VERSION}"
+      ls -l ${FILES}
+
+    # Machine-readable manifest of this build, like artisan-virt's release.json.
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then CHANNEL=stable; else CHANNEL=edge; fi
+      {
+        printf '{\n  "product": "%s",\n  "provider": "%s",\n  "version": "%s",\n  "providerVersion": "%s",\n' \
+          "$PROJECT_NAME" "$PROVIDER_NAME" "$RELEASE_VERSION" "$VERSION"
+        printf '  "channel": "%s",\n  "signed": %s,\n  "protocols": %s,\n' \
+          "$CHANNEL" "$SIGNED" "$(tr -d ' \n' < terraform-registry-manifest.json | sed -E 's/.*"protocol_versions":(\[[^]]*\]).*/\1/')"
+        printf '  "commit": "%s",\n  "ref": "%s",\n  "builtAt": "%s",\n' "$CI_COMMIT_SHA" "$CI_COMMIT_REF_NAME" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf '  "baseUrl": "%s",\n  "files": [\n' "$PACKAGE_REGISTRY_URL"
+        FIRST=1
+        for FILE in ${FILES}; do
+          [ "$FIRST" = 1 ] || printf ',\n'
+          FIRST=0
+          printf '    {"name": "%s", "size": %s, "sha256": "%s"}' \
+            "$(basename "$FILE")" "$(stat -c %s "$FILE")" "$(sha256sum "$FILE" | cut -d' ' -f1)"
+        done
+        printf '\n  ]\n}\n'
+      } > dist/release.json
+      cat dist/release.json
+
+    # Upload all assets to the GitLab Generic Package Registry.
+    - |
+      for FILE in ${FILES} dist/release.json; do
+        FILENAME=$(basename "$FILE")
+        echo "Uploading ${FILENAME} to ${PACKAGE_REGISTRY_URL}/${FILENAME}..."
+        curl --fail --silent --show-error --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+             --upload-file "${FILE}" \
+             "${PACKAGE_REGISTRY_URL}/${FILENAME}" > /dev/null
+      done
+      echo "=========================================================="
+      echo "Package Registry Base URL: ${PACKAGE_REGISTRY_URL}"
+      echo "Linux (AMD64):             ${PACKAGE_REGISTRY_URL}/${PROJECT_NAME}_${VERSION}_linux_amd64.zip"
+      echo "Linux (ARM64):             ${PACKAGE_REGISTRY_URL}/${PROJECT_NAME}_${VERSION}_linux_arm64.zip"
+      echo "macOS (ARM64):             ${PACKAGE_REGISTRY_URL}/${PROJECT_NAME}_${VERSION}_darwin_arm64.zip"
+      echo "Windows (AMD64):           ${PACKAGE_REGISTRY_URL}/${PROJECT_NAME}_${VERSION}_windows_amd64.zip"
+      echo "Checksums File:            ${PACKAGE_REGISTRY_URL}/${PROJECT_NAME}_${VERSION}_SHA256SUMS"
+      echo "Build manifest:            ${PACKAGE_REGISTRY_URL}/release.json"
+      echo "=========================================================="
+
+    # Publish an official GitLab release on git tags.
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        echo "Creating official GitLab release for tag ${CI_COMMIT_TAG}..."
+        set --
+        for FILE in ${FILES}; do
+          NAME=$(basename "$FILE")
+          case "$NAME" in *.zip) TYPE=package ;; *) TYPE=other ;; esac
+          set -- "$@" --assets-link "{\"name\":\"${NAME}\",\"url\":\"${PACKAGE_REGISTRY_URL}/${NAME}\",\"link_type\":\"${TYPE}\"}"
+        done
+        release-cli create --name "Release ${CI_COMMIT_TAG}" --tag-name "${CI_COMMIT_TAG}" \
+          --description "Automated ${PROJECT_NAME} release for ${CI_COMMIT_TAG} (provider version ${VERSION}, signed: ${SIGNED}). See README \"Installing from GitLab\"." \
+          "$@"
+        # Point the fixed "stable" channel at this release.
+        STABLE_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/${PROJECT_NAME}/stable/release.json"
+        echo "Updating stable channel manifest at ${STABLE_URL}..."
+        curl --fail --silent --show-error --header "JOB-TOKEN: ${CI_JOB_TOKEN}" --upload-file dist/release.json "${STABLE_URL}" > /dev/null
+      else
+        echo "Branch push: artifacts published to generic registry as 'latest'."
+      fi
+
+    # Optional: HCP Terraform / Terraform Enterprise private registry (signed tags only).
+    - |
+      if [ -n "$CI_COMMIT_TAG" ] && [ -n "${TFC_TOKEN}" ] && [ -n "${TFC_ORGANIZATION}" ]; then
+        if [ "$SIGNED" = true ]; then
+          bash scripts/ci/publish-hcp-registry.sh "${CI_COMMIT_TAG}"
+        else
+          echo "Skipping HCP Terraform: it requires a signed release."
+        fi
+      fi
+  artifacts:
+    paths:
+      - dist/*.zip
+      - dist/*_SHA256SUMS
+      - dist/*_SHA256SUMS.sig
+      - dist/*_manifest.json
+      - dist/release.json
+    expire_in: 1 month
+  rules:
+    # Semver tags only; a suffix (v1.2.0-rc.1) is a pre-release.
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# -------------------------------------------------------------
+# Stage 3 (manual): cut the next version tag from the default branch
+# -------------------------------------------------------------
+# The tag pipeline then publishes it. Set VERSION=v1.4.0 to choose one, or
+# BUMP=patch|minor|major (default patch) to increment the latest vX.Y.Z tag.
+# This tags the GitLab repository only; push the same tag to GitHub to publish
+# it on the Terraform Registry (see README "Releasing a version").
+tag-release:
+  stage: release
+  dependencies: []
+  variables:
+    GIT_DEPTH: "0"
+    BUMP: "patch"
+  script:
+    - |
+      if [ -z "${RELEASE_TOKEN}" ]; then
+        echo "RELEASE_TOKEN is not set: create a project access token (api, write_repository)." >&2
+        exit 1
+      fi
+      if [ -z "${VERSION}" ]; then
+        LAST=$(git tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
+        LAST=${LAST:-v0.0.0}
+        IFS=. read -r MAJ MIN PAT <<< "${LAST#v}"
+        case "${BUMP}" in
+          major) VERSION="v$((MAJ + 1)).0.0" ;;
+          minor) VERSION="v${MAJ}.$((MIN + 1)).0" ;;
+          patch) VERSION="v${MAJ}.${MIN}.$((PAT + 1))" ;;
+          *) echo "BUMP must be patch, minor or major" >&2; exit 1 ;;
+        esac
+        echo "Latest release ${LAST}; ${BUMP} bump -> ${VERSION}"
+      fi
+      echo "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || { echo "VERSION must look like v1.2.3 or v1.2.3-rc.1" >&2; exit 1; }
+      if git rev-parse -q --verify "refs/tags/${VERSION}" >/dev/null; then
+        echo "Tag ${VERSION} already exists." >&2
+        exit 1
+      fi
+      curl --fail --silent --show-error --request POST \
+        --header "PRIVATE-TOKEN: ${RELEASE_TOKEN}" \
+        --data-urlencode "tag_name=${VERSION}" \
+        --data-urlencode "ref=${CI_COMMIT_SHA}" \
+        --data-urlencode "message=Release ${VERSION}" \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/repository/tags" >/dev/null
+      echo "Created tag ${VERSION} at ${CI_COMMIT_SHORT_SHA}; its pipeline publishes the release."
+      echo "To publish on the Terraform Registry too: git fetch origin --tags && git push github ${VERSION}"
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+      allow_failure: true

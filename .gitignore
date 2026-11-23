@@ -1,0 +1,21 @@
+# Build output
+/dist/
+/bin/
+/terraform-provider-artisanvirt
+/terraform-provider-artisanvirt.exe
+/coverage*.out
+
+# Terraform working files from trying the examples
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfvars
+!examples/**/*.tfvars.example
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store

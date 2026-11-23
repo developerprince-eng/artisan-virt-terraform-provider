@@ -1,0 +1,5 @@
+# CI runs on Linux and checks that generated docs/ match the committed files,
+# so everything is stored with LF line endings.
+*           text=auto eol=lf
+*.ps1       text eol=crlf
+*.zip       binary

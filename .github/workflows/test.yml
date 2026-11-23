@@ -1,0 +1,83 @@
+# Tests for the GitHub copy of this repository. Mirrors the GitLab "test" and
+# "docs" jobs; also called by release.yml before anything is published.
+name: Tests
+
+on:
+  push:
+    branches: ["**"]
+    paths-ignore:
+      - "README.md"
+      - "CHANGELOG.md"
+  pull_request:
+    paths-ignore:
+      - "README.md"
+      - "CHANGELOG.md"
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; echo "Run gofmt -w ."; exit 1; }
+      - name: go mod tidy
+        run: go mod tidy && git diff --exit-code -- go.mod go.sum
+      - run: go vet ./...
+      - run: go build -v .
+
+  docs:
+    name: Generated docs are current
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_wrapper: false
+      - run: go generate ./...
+      - name: docs/ matches the schema
+        run: |
+          git diff --exit-code -- docs/ || { echo "docs/ is stale: run 'go generate ./...' and commit"; exit 1; }
+          test -z "$(git status --porcelain -- docs/)" || { git status --porcelain -- docs/; echo "untracked docs: commit them"; exit 1; }
+      - run: go tool tfplugindocs validate --provider-name artisanvirt
+      - run: terraform fmt -recursive -check examples
+
+  test:
+    name: Terraform ${{ matrix.terraform }}
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        # Oldest and newest Terraform the tests are run against.
+        terraform: ["1.9.*", "1.17.*"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ matrix.terraform }}
+          # The wrapper script breaks terraform-plugin-testing's output parsing.
+          terraform_wrapper: false
+      - run: go mod download
+      # Unit tests plus real terraform plan/apply runs against an in-memory fake API.
+      - run: go test -v -race -timeout 20m ./...

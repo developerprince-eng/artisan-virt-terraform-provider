@@ -1,0 +1,65 @@
+# Publishes a tagged version to the public Terraform Registry.
+#
+# The registry only ingests GitHub releases: once the provider is registered
+# at registry.terraform.io, every release this workflow creates (zips,
+# SHA256SUMS, its GPG signature and the registry manifest) is picked up through
+# the registry's webhook. GitLab publishes the same version to its own package
+# registry with .gitlab-ci.yml.
+#
+# Repository secrets (Settings > Secrets and variables > Actions):
+#   GPG_PRIVATE_KEY  armored private key (or its base64), RSA; its public key is
+#                    registered under the namespace's signing keys on the registry
+#   GPG_PASSPHRASE   passphrase of that key (leave unset if it has none)
+name: Release
+
+on:
+  push:
+    tags:
+      # vX.Y.Z, plus pre-releases such as v1.2.0-rc.1
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+
+# GoReleaser creates the release and uploads its assets.
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
+  goreleaser:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # GoReleaser needs the tags and history for the version and changelog.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Import GPG key
+        id: import_gpg
+        uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd # v7.0.0
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+
+      - name: GoReleaser
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          distribution: goreleaser
+          # Keep in sync with GORELEASER_VERSION in .gitlab-ci.yml.
+          version: v2.20.3
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GIT_TOKEN }}
+          GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
