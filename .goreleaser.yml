@@ -67,9 +67,49 @@ release:
   # vX.Y.Z-rc.1 and similar tags become GitHub pre-releases; the registry
   # serves them only to configurations that pin the exact version.
   prerelease: auto
+  name_template: "{{ .ProjectName }} {{ .Tag }}"
   extra_files:
     - glob: terraform-registry-manifest.json
       name_template: "{{ .ProjectName }}_{{ .Version }}_manifest.json"
+  # Install instructions on every GitHub release page. The registry address
+  # must match RegistryAddress in internal/provider/provider.go.
+  header: |
+    ## Install from the Terraform Registry
+
+    ```hcl
+    terraform {
+      required_providers {
+        artisanvirt = {
+          source  = "developerprince/artisanvirt"
+          version = "{{ .Version }}"
+        }
+      }
+    }
+    ```
+
+    Then run `terraform init`. Registry page: https://registry.terraform.io/providers/developerprince/artisanvirt/{{ .Version }}
+  footer: |
+    ## Install from this release (offline or air-gapped)
+
+    Download the zip for your platform and `SHA256SUMS` from the assets below, verify them, and place the
+    zip in Terraform's local plugin mirror. No registry access or token is needed.
+
+    ```sh
+    VERSION={{ .Version }}
+    PLATFORM=linux_amd64   # linux_arm64, darwin_arm64, darwin_amd64, windows_amd64, ...
+    BASE=https://github.com/{{ envOrDefault "GITHUB_REPOSITORY" "developerprince/terraform-provider-artisanvirt" }}/releases/download/{{ .Tag }}
+    curl -fLO "$BASE/{{ .ProjectName }}_${VERSION}_${PLATFORM}.zip"
+    curl -fLO "$BASE/{{ .ProjectName }}_${VERSION}_SHA256SUMS"
+    curl -fLO "$BASE/{{ .ProjectName }}_${VERSION}_SHA256SUMS.sig"
+    gpg --verify {{ .ProjectName }}_${VERSION}_SHA256SUMS.sig {{ .ProjectName }}_${VERSION}_SHA256SUMS
+    grep "_${PLATFORM}.zip" {{ .ProjectName }}_${VERSION}_SHA256SUMS | sha256sum -c -
+    DIR=~/.terraform.d/plugins/registry.terraform.io/developerprince/artisanvirt
+    mkdir -p "$DIR" && mv {{ .ProjectName }}_${VERSION}_${PLATFORM}.zip "$DIR/"
+    ```
+
+    `SHA256SUMS` is signed with the key `6B0B6A4CD2811E216A9D898721806376C7816FDA`; its public key is
+    `artisanvirt-signing.pub.asc` in the repository (`gpg --import artisanvirt-signing.pub.asc`).
+    Windows (PowerShell) steps are in the repository README under "Installing → From GitHub Releases".
 
 changelog:
   use: git
